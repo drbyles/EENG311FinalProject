@@ -1,0 +1,131 @@
+%Swerling 1 Target Model
+%Dahlia Byles
+%Adapted from: https://www.mathworks.com/help/phased/ug/swerling-1-target-models.html
+%% Dwell Time and Radar Scan
+
+rotationTime = 10.0; %seconds
+rotationRate = 360/rotationTime; %degrees/second
+
+halfPowerBeamWidth = 3.0; %degrees
+dwellTime = halfPowerBeamWidth/rotationRate; %scan perios
+numScans = 10; %3 scans
+
+pulseRepitionFreq = 5000.0; %pulse/second
+pulseRepitionInterval = 1/pulseRepitionFreq; 
+
+numPulses = floor(dwellTime*pulseRepitionFreq); %Number of pulses in one dwell time
+
+%% Set up Radar model and objects
+targetModel = 'Swerling1';
+
+%setting up antenna
+operatingFreq = 1e9; %1 GHz
+antenna = phased.IsotropicAntennaElement('BackBaffled',true);
+radiator = phased.Radiator('OperatingFrequency',operatingFreq,'Sensor',antenna);
+
+%location of antenna
+radarplatform = phased.Platform('InitialPosition',[0;0;0]);
+
+%location of target
+targetplatform = phased.Platform('InitialPosition',[2000; 0; 0]);
+
+waveform = phased.LinearFMWaveform('PulseWidth',50e-6,...
+    'OutputFormat','Pulses','NumPulses',1);
+
+transmitter = phased.Transmitter('PeakPower',1000.0,'Gain',40);
+
+channel = phased.FreeSpace('OperatingFrequency',operatingFreq,'TwoWayPropagation',true);
+
+meanRCS = 5;
+%target(analyze)
+target = phased.RadarTarget('MeanRCS',meanRCS,'OperatingFrequency',operatingFreq,'Model',targetModel);
+
+%radar collector
+collector = phased.Collector('OperatingFrequency',1e9,'Sensor',antenna);
+
+%matchedFilter(analyze)
+wav = step(waveform);
+filter = phased.MatchedFilter('Coefficients',getMatchedFilter(waveform));
+
+%% Processing 
+
+z = zeros(numScans,numPulses);
+tp = zeros(numScans,numPulses);
+
+for i = 1:numScans
+    t0 = (i-1)*rotationTime;
+    t = t0;
+    for j = 1:numPulses
+        if j == 1
+            updateRCS = true;
+        else
+            updateRCS = false;
+        end
+        t = t + pulseRepitionInterval;
+        txwav = transmitter(wav);
+        
+        %find radar and target positions
+        [xradar,vradar] = radarplatform(t);
+        [xtgt,vtgt] = targetplatform(t);
+        
+        %radiate waveform to target
+        [~,ang] = rangeangle(xtgt,xradar);
+        radwav = radiator(txwav,ang);
+        
+        %propagate waveofrm to and from targer
+        propwav = channel(radwav,xradar,xtgt,vradar,vtgt);
+        
+        %reflect waveform from target
+        reflwav = target(propwav,updateRCS);
+        
+        %collect received waveform
+        collwav = collector(reflwav,ang);
+        
+        %apply matched filter to incoming signal
+        y = filter(collwav);
+        z(i,j) = max(abs(y));
+        tp(i,j) = t;
+    end
+end
+        
+%% plot the pulse amplitudes
+figure(1);
+plot(tp(:),z(:),'.')
+title('Amplitude of the Pulses for the Scan')
+ylabel('Pulse Amplitude')
+xlabel('Time(sec)')
+
+figure(2);
+histogram(z(:),25)
+title('Histogram of Received Pulse Amplitudes')
+xlabel('Pulse Amplitude')
+ylabel('Count')
+
+%% Statistical Analysis
+
+%Rayleigh Function
+x = [1 2 3 4 5 6 7 8 9 10];
+rayPDF = zeros(1,10);
+for a = 1:10
+    rayPDF(a) = (1/meanRCS)*exp(-x(a)/meanRCS);
+    
+end
+
+figure(3);
+plot(x,rayPDF)
+title('Rayleigh Probability Density Function')
+xlabel('Radar Cross Section')
+ylabel('Rayleigh Function')
+
+%CDF
+p = raylcdf(x,meanRCS);
+figure(4);
+plot(x,p)
+title('Rayleigh Cumulative Distribution Function')
+xlabel('Radar Cross Section')
+ylabel('Rayleigh Function')
+
+
+
+
+
